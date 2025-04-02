@@ -1,10 +1,10 @@
-# Plotrim
-small RNA trimming, plotting, and alignment all in once go!
+# ShortCut
+small RNA trimming, library quality control, and alignment all in one go!
 
 
 ### Create environment and install dependencies
 ```
-conda create -n plotrim shortstack r-base ryp2
+conda create -n shortcut shortstack r-base ryp2
 
 Rscript -e 'install.packages(c("tidyverse", "ggplot2", "BiocManager"), repos="https://cloud.r-project.org")'
 ```
@@ -13,7 +13,7 @@ Rscript -e 'install.packages(c("tidyverse", "ggplot2", "BiocManager"), repos="ht
 
 ## Plotrim
 ```
-python plotrim.py [-help] -fastq FASTQFILES.fq/fastq -kingdom plant/animal [-trimkey KEY] [-threads THREADS] [-out outputDirectory, default= plotrim_output/] [-annotate] [-genome GENOME.fa] [-known_mirnas MIRNAS.fa] [-dn_mirna] [-ssout ssOutputDirectory]
+python ShortCut.py [-help] -fastq FASTQFILES.fq/fastq -kingdom plant/animal [-trimkey KEY] [-threads THREADS] [-out outputDirectory, default= shortcut_output/] [-annotate] [-genome GENOME.fa] [-known_mirnas MIRNAS.fa] [-dn_mirna] [-ssout ssOutputDirectory]
 ```
 
 ## Options
