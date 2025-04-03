@@ -4,7 +4,7 @@ small RNA trimming, library quality control, and alignment all in one go!
 
 ### Create environment and install dependencies
 ```
-conda create -n shortcut shortstack r-base conda-forge::ryp2 conda-forge::r-tidyverse conda-forge::r-ggplot2
+conda create -n shortcut1 shortstack r-base r-tidyverse r-ggplot2 r-rpy2
 
 Rscript -e 'install.packages(c("tidyverse", "ggplot2", "BiocManager"), repos="https://cloud.r-project.org")'
 ```
