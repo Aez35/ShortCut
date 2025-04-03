@@ -14,7 +14,7 @@ robjects.r('library(tidyverse)')
 
 
 print("Checking required modules...")
-req_packs=["bowtie","samtools","RNAfold","cutadapt","ShortStack"]
+req_packs=["bowtie","samtools","RNAfold","cutadapt"]
 for pack in req_packs:
         path = shutil.which(pack)
         if path is not None:
@@ -58,6 +58,15 @@ if args.annotate is not None:
 
 print("--------")
 
+if args.annotate is True:
+    req_packs=["ShortStack"]
+    for pack in req_packs:
+        path = shutil.which(pack)
+        if path is not None:
+            print('Requires package {0} : {1}'.format(pack,path))
+        else:
+            msg = 'Requires package {0} : Not found!'.format(pack)
+            sys.exit(msg)
 
 path=args.out
 isExist = os.path.exists(path)
@@ -72,7 +81,7 @@ def run(cmd) :
 
 def process_fastqs(fastqs, keydna, args):
     for fastq in fastqs:
-        print("Trimming " + fastq + "with key "  + keydna)
+        print("Detecting adapter for " + fastq + " with key "  + keydna)
         if not os.path.exists(fastq):
             sys.exit(f"Error: File {fastq} does not exist. Please check the path.")
 
@@ -94,10 +103,18 @@ def process_fastqs(fastqs, keydna, args):
             sys.exit(f"Error while processing {fastq}: {e.output}")
 
         if "G" not in output:
-            sys.exit("No adapter detected. Please check input libraries are not already trimmed.")
-
-        print(f"Trimming {fastq}...")
-        print(f"Adapter detected: {output}")
+            print("No adapter detected. Copying untrimmed file to trimmedLibraries instead.")
+            
+            # Create destination filename
+            head, tail = os.path.split(fastq)
+            tfile = os.path.join('trimmedLibraries', f"t_{tail}")
+            
+            # Copy file as-is
+            shutil.copy(fastq, tfile)
+            
+            continue  # move on to the next file
+        else:
+            print(f"Adapter detected: {output}")
 
         head, tail = os.path.split(fastq)
         tfile = os.path.join('trimmedLibraries', f"t_{tail}")
@@ -130,6 +147,11 @@ def summarize_cutadapt_reports(trimmed_dir='trimmedLibraries', output_csv='trimm
             with open(filepath) as f:
                 content = f.read()
 
+            total_reads=re.search(r"Total reads processed:\s+([\d,]+)", content)
+            if total_reads:
+                total_count = total_reads.group(1).replace(",", "")
+
+
             # Extract "Reads with adapters"
             match_adapters = re.search(r"Reads with adapters:\s+([\d,]+) \(([\d.]+)%\)", content)
             if match_adapters:
@@ -150,12 +172,13 @@ def summarize_cutadapt_reports(trimmed_dir='trimmedLibraries', output_csv='trimm
                 "Reads with adapters": adapters_count,
                 "% Reads with adapters": adapters_percent,
                 "Reads written (passing filters)": written_count,
-                "% Reads written": written_percent
+                "% Reads written": written_percent,
+                "Total reads": total_count
             }
 
     # Transpose into a dataframe-like CSV structure
     metrics = ["Reads with adapters", "% Reads with adapters", 
-               "Reads written (passing filters)", "% Reads written"]
+               "Reads written (passing filters)", "% Reads written", "Total reads"]
 
     with open(output_csv, "w", newline="") as csvfile:
         writer = csv.writer(csvfile)
@@ -237,11 +260,11 @@ def get_distribution_from_trimmedLibraries(trimmedLibraries):
     print(f"CSV file '{output_csv}' created successfully.")
 
 def run_ss(t_fastq_list, genome, known_mirnas):
-    print("Annotating sRNAs in " + {args.known_mirnas})
+    print("Annotating sRNAs in " + str(args.known_mirnas))
     if args.dn_mirna == True:
         print("Conducting de novo annotation of sRNAs...")
 
-        command=("ShortStack --genomefile genome --readfile t_fastq_list --dn_mirna --known_miRNAs known_mirnas")
+        command=(f"ShortStack --genomefile ../{genome} --readfile {t_fastq_list}* --dn_mirna --known_miRNAs ../{known_mirnas}")
         run(command)
     else:
         command = f"ShortStack --genomefile ../{genome} --readfile {t_fastq_list}* --known_miRNAs ../{known_mirnas}"
@@ -260,28 +283,6 @@ def run_ss(t_fastq_list, genome, known_mirnas):
         sys.stderr.flush()
 
     process.wait()  # Ensure the process completes
-
-    """
-    Calculates the size of each FASTQ file in the given directory (total number of reads).
-
-    Parameters:
-    library_dir (str): Path to the directory containing FASTQ files.
-
-    Returns:
-    dict: Dictionary with filenames as keys and read counts as values.
-    """
-    fastq_files = [item for item in {library_dir}]
-    library_sizes = {}
-
-    for file in fastq_files:
-        count = 0
-        open_func = gzip.open if file.endswith(".gz") else open
-        with open_func(file, 'rt') as f:  # 'rt' ensures text mode
-            for _ in f:
-                count += 1
-        library_sizes[os.path.basename(file)] = count // 4  # FASTQ has 4 lines per read
-
-    return library_sizes
 
 
 
@@ -335,50 +336,70 @@ def main():
 
             # Load data
             df <- read_csv("trimming_summary.csv")
+
+            # Pivot into long format, including Total reads
             df_long <- df %>%
-                filter(Metric %in% c("Reads with adapters", "Reads written (passing filters)")) %>%
-                pivot_longer(-Metric, names_to = "Library", values_to = "Count") %>%
-                mutate(
-                    Count = as.numeric(Count),
-                    Metric = factor(Metric, levels = c("Reads with adapters", "Reads written (passing filters)"))
+            filter(Metric %in% c( "Reads with adapters", "Reads written (passing filters)","Total reads")) %>%
+            pivot_longer(-Metric, names_to = "Library", values_to = "Count") %>%
+            mutate(
+                Count = as.numeric(Count),
+                Metric = factor(
+                Metric,
+                levels = c("Reads with adapters", "Reads written (passing filters)","Total reads")
                 )
+            )
+            
+            # Pivot wider to get totals for each library
+            totals <- df_long %>%
+            filter(Metric == "Total reads") %>%
+            select(Library, Total = Count)
+
+            # Join with long data and compute percentage
+            df_labeled <- df_long %>%
+            left_join(totals, by = "Library") %>%
+            mutate(Percent = round(100 * Count / Total, 1),
+                    Label = paste0(Percent, "%"))
+
             # Extract % Reads written to use as labels
             percent_labels <- df %>%
             filter(Metric == "% Reads written") %>%
             pivot_longer(-Metric, names_to = "Library", values_to = "Percent")
 
+            # Plot function
+            lib_plot <- function(data) {
+            ggplot(df_labeled, aes(x = Library, y = Count, fill = Metric)) +
+                geom_bar(stat = "identity", position = position_dodge(width = 0.7), 
+                        color = "black", width = 0.6, alpha = 0.85) +
+                geom_text(
+                    aes(label = Label),
+                    position = position_dodge(width = 0.7),
+                    vjust = -0.5,
+                    size = 3,
+                    fontface = "bold"
+                ) +
+                scale_fill_manual(values = c(
+                    "Total reads" = "grey80",
+                    "Reads written (passing filters)" = "steelblue",
+                    "Reads with adapters" = "lightblue"
+                )) +
+                scale_y_continuous(labels = scales::comma, expand = expansion(mult = c(0, 0.1))) +
+                labs(
+                    title = "Cutadapt Summary",
+                    x = "Library",
+                    y = "Read Count",
+                    fill = "Read Type"
+                ) +
+                theme_minimal() +
+                theme(axis.text.x = element_text(angle = 45, hjust = 1))
+            }
 
-            # Create the overlapping bar plot
-            lib_plot<- function(data){ggplot(df_long, aes(x = Library, y = Count, fill = Metric)) +
-            geom_bar(stat = "identity", position = "identity", color = "black", width = 0.6, alpha = 0.8) +
-            scale_fill_manual(values = c(
-                "Reads with adapters" = "lightblue",
-                "Reads written (passing filters)" = "steelblue"
-            )) +
-            geom_text(
-                data = percent_labels,
-                aes(x = Library, y = 0, label = Percent),
-                inherit.aes = FALSE,
-                vjust = 1.5,
-                size = 3.5,
-                fontface = "bold"
-            ) +
-            scale_y_continuous(labels = scales::comma) +
-            labs(
-                title = "Cutadapt: Reads with Adapters vs. Reads Written",
-                x = "Library",
-                y = "Read Count",
-                fill = "Read Type"
-            ) +
-            theme_minimal() +
-            theme(axis.text.x = element_text(angle = 45, hjust = 1))}
+            # Generate and save the plot
+            plot_obj <- lib_plot(df_labeled)
+            ggsave("Library_summary.png", plot = plot_obj, width = 10, height = 7, dpi = 300, bg = "white")
 
-            plot_obj <- lib_plot(df)
-            ggsave("library_trim_summary.png", plot = plot_obj, width = 10, height = 7, dpi = 300, bg="white")
-            
             """
 
-            robjects.r(r_script1)
+            #robjects.r(r_script1)
             
             #Python code:
             file_path ="read_length_distribution.csv"
@@ -394,7 +415,7 @@ def main():
             libraries <- colnames(data_filt)[-1]
 
             # Start PDF device
-            pdf("read_length_distribution_per_library.pdf", width = 10, height = 6, bg = "white")
+            pdf("Read_distribution.pdf", width = 10, height = 6, bg = "white")
 
             # Loop through libraries and plot each one
             for (lib in libraries) {
@@ -420,12 +441,17 @@ def main():
             dev.off()
             """
 
-            robjects.r(r_script)
+            #robjects.r(r_script)
 
             t_fastq_files = "trimmedLibraries/"
             if args.annotate is not None:
                 run_ss(t_fastq_files,args.genome,args.known_mirnas)
             
+
+            #cmd = f"rm -rf trimmedLibraries/*.txt"
+            #os.system(cmd)
+            cmd = f"rm trimming_summary.csv read_length_distribution.csv"
+            os.system(cmd)
 if __name__ == "__main__":
     main()
 
