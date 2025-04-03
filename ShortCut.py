@@ -264,10 +264,10 @@ def run_ss(t_fastq_list, genome, known_mirnas):
     if args.dn_mirna == True:
         print("Conducting de novo annotation of sRNAs...")
 
-        command=(f"ShortStack --genomefile ../{genome} --readfile {t_fastq_list}* --dn_mirna --known_miRNAs ../{known_mirnas}")
+        command=(f"ShortStack --genomefile ../{genome} --threads {threads} --readfile {t_fastq_list}* --dn_mirna --known_miRNAs ../{known_mirnas}")
         run(command)
     else:
-        command = f"ShortStack --genomefile ../{genome} --readfile {t_fastq_list}* --known_miRNAs ../{known_mirnas}"
+        command = f"ShortStack --genomefile ../{genome} --threads {threads} --readfile {t_fastq_list}* --known_miRNAs ../{known_mirnas}"
         # Open process and stream output in real-time
     # Use Popen for real-time output streaming
     process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1, universal_newlines=True)
