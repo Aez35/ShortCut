@@ -1,5 +1,5 @@
 # ShortCut
-small RNA trimming, library quality control, and alignment all in one go!
+small RNA trimming, library quality control, and alignment all in one go! Currently in development.
 
 
 ### Create environment and install dependencies
