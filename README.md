@@ -4,7 +4,7 @@ small RNA trimming, library quality control, and alignment all in one go! Curren
 
 ### Create environment and install dependencies
 ```
-conda create -n shortcut1 shortstack r-base r-tidyverse r-ggplot2
+conda create -n shortcut shortstack r-base r-tidyverse r-ggplot2
 conda install -c conda-forge rpy2
 ```
 
