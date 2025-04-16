@@ -12,7 +12,6 @@ import rpy2.robjects as robjects
 robjects.r('library(ggplot2)')
 robjects.r('library(tidyverse)')
 
-
 print("Checking required modules...")
 req_packs=["bowtie","samtools","RNAfold","cutadapt"]
 for pack in req_packs:
@@ -80,12 +79,13 @@ def run(cmd) :
     proc = subprocess.call(cmd, shell=True,stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)
 
 def process_fastqs(fastqs, keydna, args):
+    count = 0  # Initialize count at the start of the function
+
     for fastq in fastqs:
         print("Detecting adapter for " + fastq + " with key "  + keydna)
         if not os.path.exists(fastq):
             sys.exit(f"Error: File {fastq} does not exist. Please check the path.")
 
-        # Adapter detection command
         if fastq.endswith(".gz"):
             cmd = (
                 f"gzip -dc {fastq} | awk -v target='{keydna}' '{{idx = index($0, target); if (idx) print substr($0, idx + length(target),20)}}' | "
@@ -104,15 +104,12 @@ def process_fastqs(fastqs, keydna, args):
 
         if "G" not in output:
             print("No adapter detected. Copying untrimmed file to trimmedLibraries instead.")
-            
-            # Create destination filename
+            count += 1  # Correct increment
+
             head, tail = os.path.split(fastq)
-            tfile = os.path.join('trimmedLibraries', f"t_{tail}")
-            
-            # Copy file as-is
+            tfile = os.path.join('trimmedLibraries', f"{tail}")
             shutil.copy(fastq, tfile)
-            
-            continue  # move on to the next file
+            continue
         else:
             print(f"Adapter detected: {output}")
 
@@ -120,7 +117,6 @@ def process_fastqs(fastqs, keydna, args):
         tfile = os.path.join('trimmedLibraries', f"t_{tail}")
         report_file = os.path.join('trimmedLibraries', f"{tail}_cutadapt_report.txt")
 
-        # Construct the Cutadapt command
         if fastq.endswith(".gz"):
             cmd = (
                 f"gzip -dc {fastq} | cutadapt -j {args.threads} -a {output} -o {tfile} -m 12 -"
@@ -128,13 +124,14 @@ def process_fastqs(fastqs, keydna, args):
         else:
             cmd = f"cutadapt -j {args.threads} -a {output} -o {tfile} -m 12 {fastq}"
 
-        # Run Cutadapt and capture its output
         try:
             result = subprocess.run(cmd, shell=True, text=True, capture_output=True)
             with open(report_file, "w") as rf:
                 rf.write(result.stdout)
         except Exception as e:
             sys.exit(f"Error trimming {fastq}: {e}")
+
+    return count
 
 def summarize_cutadapt_reports(trimmed_dir='trimmedLibraries', output_csv='trimming_summary.csv'):
     summary = {}
@@ -191,7 +188,7 @@ def summarize_cutadapt_reports(trimmed_dir='trimmedLibraries', output_csv='trimm
                 row.append(summary[sample].get(metric, "N/A"))
             writer.writerow(row)
     
-    print(f"✅ Cutadapt summary written to {output_csv}")
+    print(f"Cutadapt summary written to {output_csv}")
 
 def DNAcheck(dna):
     """
@@ -257,7 +254,6 @@ def get_distribution_from_trimmedLibraries(trimmedLibraries):
         writer = csv.writer(csvfile)
         writer.writerows(csv_data)
 
-    print(f"CSV file '{output_csv}' created successfully.")
 
 def run_ss(t_fastq_list, genome, known_mirnas):
     print("Annotating sRNAs in " + str(args.known_mirnas))
@@ -284,7 +280,31 @@ def run_ss(t_fastq_list, genome, known_mirnas):
 
     process.wait()  # Ensure the process completes
 
+def count_reads(filepath):
+    """Count reads in a FASTQ or FASTQ.GZ file (1 read = 4 lines)"""
+    open_func = gzip.open if filepath.endswith('.gz') else open
+    with open_func(filepath, 'rt') as f:
+        return sum(1 for _ in f) // 4
 
+def get_fastq_files(directory):
+    """Return list of .fastq, .fastq.gz, .fq, .fq.gz files in directory"""
+    valid_extensions = ('.fastq', '.fastq.gz', '.fq', '.fq.gz')
+    return [f for f in os.listdir(directory) if f.endswith(valid_extensions)]
+
+def generate_library_size_csv(directory, output_csv="library_sizes.csv"):
+    fastq_files = get_fastq_files(directory)
+    if not fastq_files:
+        print("No FASTQ files found in directory.")
+        return
+
+    with open(output_csv, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["Library", "ReadCount"])
+
+        for filename in fastq_files:
+            filepath = os.path.join(directory, filename)
+            read_count = count_reads(filepath)
+            writer.writerow([filename, read_count])
 
 #_________ run ____________
 def main():
@@ -322,11 +342,13 @@ def main():
             if (len(key) < 20) or (len(key) > 30):
                 sys.exit("Trim key must be between 20 and 30 letters")
 
+            #pre-trimmed lib count  
+            count=0
+  
             #Trim adapters
-            process_fastqs(fastqs, keydna, args)
-            summarize_cutadapt_reports()
+            count = process_fastqs(fastqs, keydna, args)
 
-            print("Adapter trimming complete.")
+            print("Adapter trimming complete. ✅")
 
             get_distribution_from_trimmedLibraries("trimmedLibraries/")
 
@@ -335,7 +357,7 @@ def main():
             r_script1 = """
 
             # Load data
-            df <- read_csv("trimming_summary.csv")
+            df <- read_csv("trimming_summary.csv",show_col_types = FALSE)
 
             # Pivot into long format, including Total reads
             df_long <- df %>%
@@ -345,10 +367,10 @@ def main():
                 Count = as.numeric(Count),
                 Metric = factor(
                 Metric,
-                levels = c("Reads with adapters", "Reads written (passing filters)","Total reads")
+                levels = c("Total reads","Reads with adapters", "Reads written (passing filters)")
                 )
             )
-            
+                
             # Pivot wider to get totals for each library
             totals <- df_long %>%
             filter(Metric == "Total reads") %>%
@@ -395,14 +417,22 @@ def main():
 
             # Generate and save the plot
             plot_obj <- lib_plot(df_labeled)
-            ggsave("Library_summary.png", plot = plot_obj, width = 10, height = 7, dpi = 300, bg = "white")
-
+            ggsave("Cutadapt_summary.png", plot = plot_obj, width = 10, height = 7, dpi = 300, bg = "white")
             """
+            if count < len(args.fastq):
+                summarize_cutadapt_reports()
+                print("Libraries trimmed: " + str(count))
 
-            robjects.r(r_script1)
+                # Generate R plot
+                robjects.r(r_script1)
+                print("Cutadapt summary generated. ✅")
+
+                
+            # Only continue if some libraries were actually trimmed
+            get_distribution_from_trimmedLibraries("trimmedLibraries/",)
+
             
-            #Python code:
-            file_path ="read_length_distribution.csv"
+            #Create read distribution plots            
             r_script="""
 
             file_path <- "read_length_distribution.csv"
@@ -425,33 +455,80 @@ def main():
 
             plot_obj <- ggplot(df_single, aes(x = Read.Length, y = Count)) +
                 geom_line(color = "steelblue", linewidth = 1) +
+                geom_point(color = "steelblue", size = 2) +  # Add points to each x
                 theme_minimal() +
                 labs(
                 title = paste("Read Length Distribution:", lib),
                 x = "Read Length",
                 y = "Count"
                 ) +
-                scale_x_continuous(breaks = seq(min(df_single$Read.Length), max(df_single$Read.Length), by = 1)) +
-                theme(legend.position = "none")
+                scale_x_continuous(
+                breaks = seq(min(df_single$Read.Length), max(df_single$Read.Length), by = 1)
+                ) +
+                theme(
+                legend.position = "none",
+                panel.grid.minor.x = element_blank(), # Remove minor x gridlines
+                panel.grid.major.x = element_line(color = "grey80") # Keep only integer lines
+                )
 
             print(plot_obj)  # Each plot gets its own page
             }
 
-            # Close PDF device
             dev.off()
+
             """
 
             robjects.r(r_script)
+            print("Read distribution plot generated. ✅")
+
+            generate_library_size_csv("trimmedLibraries",output_csv="library_sizes.csv")
+
+            r_script_libsize = """
+            library(tidyverse)
+
+            # Define your directory
+            libCounts<- read.csv("library_sizes.csv")
+
+            libCounts <- libCounts %>%
+            mutate(Library = factor(Library, levels = Library[order(ReadCount)]),
+                    ReadCount_shadow = ReadCount * 0.90)  # Adjust depth of the "3D" effect
+
+            plot_obj<-ggplot(libCounts) +
+            # Shadow (slightly offset to bottom-right)
+            geom_col(aes(x = Library, y = ReadCount_shadow), fill = "grey30", width = 0.6) +
+            # Main bar
+            geom_col(aes(x = Library, y = ReadCount), fill = "steelblue", width = 0.6) +
+            # Labels
+            geom_text(aes(x = Library, y = ReadCount, label = format(ReadCount, big.mark = ",")),
+                        vjust = -0.5, size = 3, fontface = "bold") +
+            labs(
+                title = "Read Counts per Library",
+                x = "Library",
+                y = "Number of Reads"
+            ) +
+            theme_minimal(base_size = 13) +
+            theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+            # Generate and save the plot
+            ggsave("Library_summary.png", plot = plot_obj, width = 10, height = 7, dpi = 300, bg = "white")
+            """
+
+            robjects.r(r_script_libsize)
+            print("Library size plot generated. ✅")
+
 
             t_fastq_files = "trimmedLibraries/"
             if args.annotate is not None:
                 run_ss(t_fastq_files,args.genome,args.known_mirnas)
             
 
-            #cmd = f"rm -rf trimmedLibraries/*.txt"
-            #os.system(cmd)
+            cmd = f"rm -rf trimmedLibraries/*.txt"
+            os.system(cmd)
             cmd = f"rm trimming_summary.csv read_length_distribution.csv"
             os.system(cmd)
+            cmd = f"rm library_sizes.csv"
+            os.system(cmd)
+
 if __name__ == "__main__":
     main()
 
