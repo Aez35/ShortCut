@@ -73,6 +73,9 @@ if isExist==True:
     msg = ("Output directory '" + args.out + "/' already exists. Please assign a new output directory using option '-out'.")
     sys.exit(msg)
 
+if args.annotate is None and args.genome is not None:
+        msg="Error: To annotate using ShortStack, please include the option '-annotate'."
+        sys.exit(msg)
 #_____________ Functions ______________
 def run(cmd) :
 #Run subprocess
