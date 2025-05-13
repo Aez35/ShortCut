@@ -30,7 +30,7 @@ ap.add_argument("-n", help="Results file name")
 ap.add_argument("-threads", help="Specify number of threads for samtools", default = 1)
 ap.add_argument("-kingdom", required=True,choices=["plant","animal"],help="Specify animal or plant")
 ap.add_argument("-annotate",help="Specify whether you want ShortStack to annotate",nargs='?', const='')
-ap.add_argument("-out", help="output directory",default="plotrim_output")
+ap.add_argument("-out", help="output directory",default="ShortCut_output")
 ap.add_argument('-genome',help='Genome for annotation')
 ap.add_argument('-known_mirnas',help='FASTA-formatted file of known mature miRNA sequences')
 ap.add_argument("-ssout", help="output directory",default="Shortstack_output")
@@ -72,10 +72,11 @@ isExist = os.path.exists(path)
 if isExist==True:
     msg = ("Output directory '" + args.out + "/' already exists. Please assign a new output directory using option '-out'.")
     sys.exit(msg)
-
+        
 if args.annotate is None and args.genome is not None:
         msg="Error: To annotate using ShortStack, please include the option '-annotate'."
         sys.exit(msg)
+
 #_____________ Functions ______________
 def run(cmd) :
 #Run subprocess
@@ -258,15 +259,20 @@ def get_distribution_from_trimmedLibraries(trimmedLibraries):
         writer.writerows(csv_data)
 
 
-def run_ss(t_fastq_list, threads, genome, known_mirnas):
+def run_ss(t_fastq_list, threads,genome, known_mirnas):
     print("Annotating sRNAs in " + str(args.known_mirnas))
     if args.dn_mirna == True:
         print("Conducting de novo annotation of sRNAs...")
 
         command=(f"ShortStack --genomefile ../{genome} --threads {threads} --readfile {t_fastq_list}* --dn_mirna --known_miRNAs ../{known_mirnas}")
+        print("Annotating using the following command:")
+        print(command)
         run(command)
     else:
         command = f"ShortStack --genomefile ../{genome} --threads {threads} --readfile {t_fastq_list}* --known_miRNAs ../{known_mirnas}"
+        print("Annotating using the following command:")
+        print(command)
+        run(command)
         # Open process and stream output in real-time
     # Use Popen for real-time output streaming
     process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1, universal_newlines=True)
@@ -531,6 +537,6 @@ def main():
                 run_ss(t_fastq_files,args.threads,args.genome,args.known_mirnas)
             
 
+
 if __name__ == "__main__":
     main()
-
