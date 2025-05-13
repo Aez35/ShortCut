@@ -255,7 +255,7 @@ def get_distribution_from_trimmedLibraries(trimmedLibraries):
         writer.writerows(csv_data)
 
 
-def run_ss(t_fastq_list, genome, known_mirnas):
+def run_ss(t_fastq_list, threads, genome, known_mirnas):
     print("Annotating sRNAs in " + str(args.known_mirnas))
     if args.dn_mirna == True:
         print("Conducting de novo annotation of sRNAs...")
@@ -519,7 +519,7 @@ def main():
 
             t_fastq_files = "trimmedLibraries/"
             if args.annotate is not None:
-                run_ss(t_fastq_files,args.genome,args.known_mirnas)
+                run_ss(t_fastq_files,args.threads,args.genome,args.known_mirnas)
             
 
             cmd = f"rm -rf trimmedLibraries/*.txt"
