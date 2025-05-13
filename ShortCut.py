@@ -519,18 +519,17 @@ def main():
             robjects.r(r_script_libsize)
             print("Library size plot generated. ✅")
 
-
-            t_fastq_files = "trimmedLibraries/"
-            if args.annotate is not None:
-                run_ss(t_fastq_files,args.threads,args.genome,args.known_mirnas)
-            
-
             cmd = f"rm -rf trimmedLibraries/*.txt"
             os.system(cmd)
             cmd = f"rm trimming_summary.csv read_length_distribution.csv"
             os.system(cmd)
             cmd = f"rm library_sizes.csv"
             os.system(cmd)
+
+            t_fastq_files = "trimmedLibraries/"
+            if args.annotate is not None:
+                run_ss(t_fastq_files,args.threads,args.genome,args.known_mirnas)
+            
 
 if __name__ == "__main__":
     main()
