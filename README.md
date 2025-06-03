@@ -4,7 +4,18 @@ small RNA trimming, library quality control, and alignment all in one go! Curren
 
 ### Create environment and install dependencies
 ```
+#Create environment and install dependencies
 conda create -n shortcut shortstack r-base r-tidyverse r-ggplot2 cutadapt
+
+#Acitivate environment
+conda activate shortcut
+
+#Configure bioconda
+conda config --add channels bioconda
+conda config --add channels conda-forge
+conda config --set channel_priority strict
+
+#install rpy2
 conda install -c conda-forge rpy2
 ```
 
@@ -22,7 +33,8 @@ python ShortCut.py [-help] -fastq FASTQFILES.fq/fastq -kingdom plant/animal [-tr
 |help       | prints help message                                            |
 |fastq      | List of small RNA-seq libraries in FASTQ format (zipped ok)    |
 |kingdom    | Specify either 'plant' or 'animal'                             |
-|out        | Output directory, default is plotrim_output                    |
+|m          | Minimum read length for Cutadapt. Default is 12.               |
+|out        | Output directory, default is ShortCut_output                   |
 |threads    | Specify number of threads to use during trimming step          |
 |annotate   | Switch to trigger sRNA annotations with ShortStack             |
 |known_mirnas| FASTA file containing known miRNAs for ShortStack annotating  |
