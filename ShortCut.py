@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-version = '0.1'
+version = '0.2'
 
 import re, gzip
 import argparse, shutil, subprocess
@@ -45,6 +45,7 @@ print("sRNATrim version " + version)
 print("Options:")
 print("     'Threads' " + str(args.threads))
 print("     'Kingdom' "+ args.kingdom)
+print("     'm' "+ args.m)
 print("     'Output directory' "+ args.out+"/")
 if args.fastq is not None:
     print("     'Fastqs' " +str(args.fastq))
@@ -109,7 +110,6 @@ def process_fastqs(fastqs, keydna, args):
 
         if "G" not in output:
             print("No adapter detected. Copying untrimmed file to trimmedLibraries instead.")
-            count += 1  # Correct increment
 
             head, tail = os.path.split(fastq)
             tfile = os.path.join('trimmedLibraries', f"{tail}")
@@ -117,7 +117,7 @@ def process_fastqs(fastqs, keydna, args):
             continue
         else:
             print(f"Adapter detected: {output}")
-            count += 1  # Correct increment
+            count += 1 
 
         head, tail = os.path.split(fastq)
         tfile = os.path.join('trimmedLibraries', f"t_{tail}")
@@ -324,7 +324,6 @@ def main():
 
             fastqs = ['../' + item for item in args.fastq]
 
-            print("_____________________________")
             print(" ")
             print("Trimming adapters...")
             #If no key provided, set key according to kingdom.
@@ -430,7 +429,7 @@ def main():
             plot_obj <- lib_plot(df_labeled)
             ggsave("Cutadapt_summary.png", plot = plot_obj, width = 10, height = 7, dpi = 300, bg = "white")
             """
-            if count < len(args.fastq):
+            if count != 0:
                 summarize_cutadapt_reports()
                 print("Libraries trimmed: " + str(count))
 
