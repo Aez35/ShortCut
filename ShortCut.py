@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-version = '0.1'
+version = '0.2'
 
 import re, gzip
 import argparse, shutil, subprocess
@@ -27,6 +27,7 @@ ap = argparse.ArgumentParser()
 
 ap.add_argument('-fastq',nargs='*',required=True,help='One or more fastq alignment files')
 ap.add_argument("-n", help="Results file name")
+ap.add_argument("-m", help="Minimum length of reads for Cutadapt", default = 12)
 ap.add_argument("-threads", help="Specify number of threads for samtools", default = 1)
 ap.add_argument("-kingdom", required=True,choices=["plant","animal"],help="Specify animal or plant")
 ap.add_argument("-annotate",help="Specify whether you want ShortStack to annotate",nargs='?', const='')
@@ -44,6 +45,7 @@ print("sRNATrim version " + version)
 print("Options:")
 print("     'Threads' " + str(args.threads))
 print("     'Kingdom' "+ args.kingdom)
+print("     'm' "+ args.m)
 print("     'Output directory' "+ args.out+"/")
 if args.fastq is not None:
     print("     'Fastqs' " +str(args.fastq))
@@ -108,7 +110,6 @@ def process_fastqs(fastqs, keydna, args):
 
         if "G" not in output:
             print("No adapter detected. Copying untrimmed file to trimmedLibraries instead.")
-            count += 1  # Correct increment
 
             head, tail = os.path.split(fastq)
             tfile = os.path.join('trimmedLibraries', f"{tail}")
@@ -116,6 +117,7 @@ def process_fastqs(fastqs, keydna, args):
             continue
         else:
             print(f"Adapter detected: {output}")
+            count += 1 
 
         head, tail = os.path.split(fastq)
         tfile = os.path.join('trimmedLibraries', f"t_{tail}")
@@ -123,10 +125,10 @@ def process_fastqs(fastqs, keydna, args):
 
         if fastq.endswith(".gz"):
             cmd = (
-                f"gzip -dc {fastq} | cutadapt -j {args.threads} -a {output} -o {tfile} -m 12 -"
+                f"gzip -dc {fastq} | cutadapt -j {args.threads} -a {output} -o {tfile} -m {args.m} -"
             )
         else:
-            cmd = f"cutadapt -j {args.threads} -a {output} -o {tfile} -m 12 {fastq}"
+            cmd = f"cutadapt -j {args.threads} -a {output} -o {tfile} -m {args.m} {fastq}"
 
         try:
             result = subprocess.run(cmd, shell=True, text=True, capture_output=True)
@@ -322,7 +324,6 @@ def main():
 
             fastqs = ['../' + item for item in args.fastq]
 
-            print("_____________________________")
             print(" ")
             print("Trimming adapters...")
             #If no key provided, set key according to kingdom.
@@ -428,7 +429,7 @@ def main():
             plot_obj <- lib_plot(df_labeled)
             ggsave("Cutadapt_summary.png", plot = plot_obj, width = 10, height = 7, dpi = 300, bg = "white")
             """
-            if count < len(args.fastq):
+            if count != 0:
                 summarize_cutadapt_reports()
                 print("Libraries trimmed: " + str(count))
 
@@ -527,7 +528,7 @@ def main():
 
             cmd = f"rm -rf trimmedLibraries/*.txt"
             os.system(cmd)
-            cmd = f"rm trimming_summary.csv read_length_distribution.csv"
+            cmd = f"rm read_length_distribution.csv"
             os.system(cmd)
             cmd = f"rm library_sizes.csv"
             os.system(cmd)
