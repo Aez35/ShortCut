@@ -45,7 +45,7 @@ print("sRNATrim version " + version)
 print("Options:")
 print("     'Threads' " + str(args.threads))
 print("     'Kingdom' "+ args.kingdom)
-print("     'm' "+ args.m)
+print("     'm' "+ str(args.m))
 print("     'Output directory' "+ args.out+"/")
 if args.fastq is not None:
     print("     'Fastqs' " +str(args.fastq))
