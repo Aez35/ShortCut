@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-version = '0.2'
+version = '1.0'
 
 import re, gzip
 import argparse, shutil, subprocess
