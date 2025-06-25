@@ -4,8 +4,8 @@ small RNA trimming, library quality control, and alignment all in one go! Curren
 
 ### Create environment and install dependencies
 ```
-#Create environment and install dependencies
-conda create -n shortcut shortstack r-base r-tidyverse r-ggplot2 cutadapt
+#Create environment
+conda create -n shortcut
 
 #Acitivate environment
 conda activate shortcut
@@ -16,8 +16,20 @@ conda config --add channels conda-forge
 conda config --set channel_priority strict
 
 #install rpy2
-conda install -c conda-forge rpy2
+conda install -c conda-forge rpy2 shortstack r-base r-tidyverse r-ggplot2 cutadapt
 ```
+### Requirements
+`python` >= 3.6  
+`biopython` >= 1.85  
+`r-base` >= 4.3.3  
+`r-tidyverse` >= 2.0  
+`r-ggplot2` >= 3.5.2  
+`shortstack` >= 4.0.4  
+`cutadapt` >= 4.8   
+`rpy2` >= 25.3.1  
+`cutadapt` >= 4.8  
+
+
 
 # Usage
 
