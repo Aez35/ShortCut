@@ -1,5 +1,5 @@
 # ShortCut
-small RNA trimming, library quality control, and alignment all in one go! Currently in development.
+small RNA trimming, library quality control, and alignment all in one go!
 
 
 ### Create environment and install dependencies
@@ -23,7 +23,7 @@ conda create -n shortcut shortcut
 
 ## ShortCut
 ```
-python ShortCut.py [-help] -fastq FASTQ/FASTA -kingdom plant/animal [-trimkey KEY] [-threads THREADS] [-out outputDirectory, default= shortcut_output/] [-annotate] [-genome GENOME.fa] [-known_mirnas MIRNAS.fa] [-dn_mirna] [-ssout ssOutputDirectory]
+ShortCut [-help] -fastq FASTQ/FASTA -kingdom plant/animal [-trimkey KEY] [-threads THREADS] [-out outputDirectory, default= shortcut_output/] [-annotate] [-genome GENOME.fa] [-known_mirnas MIRNAS.fa] [-dn_mirna] [-ssout ssOutputDirectory]
 ```
 
 ## Options
