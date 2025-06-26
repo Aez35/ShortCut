@@ -5,18 +5,7 @@ small RNA trimming, library quality control, and alignment all in one go! Curren
 ### Create environment and install dependencies
 ```
 #Create environment
-conda create -n shortcut
-
-#Acitivate environment
-conda activate shortcut
-
-#Configure bioconda
-conda config --add channels bioconda
-conda config --add channels conda-forge
-conda config --set channel_priority strict
-
-#install rpy2
-conda install -c conda-forge rpy2 shortstack r-base r-tidyverse r-ggplot2 cutadapt
+conda create -n shortcut shortcut
 ```
 ### Requirements
 `python` >= 3.6  
@@ -26,8 +15,7 @@ conda install -c conda-forge rpy2 shortstack r-base r-tidyverse r-ggplot2 cutada
 `r-ggplot2` >= 3.5.2  
 `shortstack` >= 4.0.4  
 `cutadapt` >= 4.8   
-`rpy2` >= 25.3.1  
-`cutadapt` >= 4.8  
+`rpy2`
 
 
 
@@ -56,6 +44,14 @@ python ShortCut.py [-help] -fastq FASTQFILES.fq/fastq -kingdom plant/animal [-tr
 |dn_mirna   | De novo miRNA search option in ShortStack                      |
 
 
+## Example
+
+```
+#Ensure sra-tools is installed in your environment
+fasterq-dump SRR218099 SRR218096
+
+ShortCut -fastq SRR* -kingdom plant
+```
 
 # Results
 ## Cutadapt summary
