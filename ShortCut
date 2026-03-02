@@ -1,542 +1,492 @@
-#!/usr/bin/env python
-version = '1.0'
+#!/usr/bin/env python3
+version = '2.0'
 
 import re, gzip
 import argparse, shutil, subprocess
-from subprocess import Popen, PIPE, STDOUT
 import os, glob
 from pathlib import Path
 import csv, sys, time
 from csv import writer
-import rpy2.robjects as robjects
-robjects.r('library(ggplot2)')
-robjects.r('library(tidyverse)')
+import subprocess
 
-print("Checking required modules...")
-req_packs=["bowtie","samtools","RNAfold","cutadapt"]
-for pack in req_packs:
-        path = shutil.which(pack)
-        if path is not None:
-            print('Requires package {0} : {1}'.format(pack,path))
-        else:
-            msg = 'Requires package {0} : Not found!'.format(pack)
-            sys.exit(msg)
+# New MJA
+from collections import defaultdict
+import pandas as pd
+import plotly.express as px
+import plotly.offline as pyo
+import plotly.graph_objects as go
+
+from concurrent.futures import ThreadPoolExecutor
+
+def check_executables():
+    req_exe=["cutadapt","awk","gzip","uniq","sort","head","grep","rm"]
+    missing = []
+    for pack in req_exe:
+        if shutil.which(pack) is None:
+            missing.append(pack)
+    if missing:
+        sys.exit(f"Missing required executables: {', '.join(missing)}")
+
+def get_ShortCut_args(version):
+    ap = argparse.ArgumentParser(description=f"ShortCut v{version}")
+    ap.add_argument('--fastq', nargs='+', required=True,
+                type=valid_fastq,
+                help='One or more FASTQ alignment files')
+    ap.add_argument("--min_read_size", type=int,
+                help="Minimum length of trimmed reads to retain", default = 12)
+    ap.add_argument("--out_dir", help="output directory",default="ShortCut_output")
+    ap.add_argument("--threads", type=int, default=1,
+                    help="Number of threads to use. Default=1")
+    ap.add_argument("--dicermin", type=int, default=21,
+                    help="Minimum trimmed read length for true regulatory small RNA. Default=21")
+    ap.add_argument("--dicermax", type=int, default=24,
+                    help="Minimum trimmed read length for true regulatory small RNA. Default=24")
+    group = ap.add_mutually_exclusive_group()
+    group.add_argument('--trim_key', type=valid_sequence, 
+                    help='Trim key to use to infer adapter sequence (default: UCGGACCAGGCUUCAUUCCCC)')
+    group.add_argument('--adapter', type=valid_sequence, help='Adapter sequence to use for trimming')
+
+    args = ap.parse_args()
+
+    # Set default after parsing
+    if args.trim_key is None and args.adapter is None:
+        args.trim_key = valid_sequence('UCGGACCAGGCUUCAUUCCCC')
+    
+    # Validate dicermin, dicermax, and min_read_size
+    if(args.dicermin > args.dicermax):
+        sys.exit("Invalid settings for dicermin and dicermax. The dicermin value must be <= the dicermax value.")
+    if(args.dicermin < args.min_read_size):
+        sys.exit("Invalide settings for dicermin and min_read_size. The dicermin value must be >= the min_read_size value.")
+
+    return args
+
+def valid_fastq(filepath):
+    if not os.path.isfile(filepath):
+        raise argparse.ArgumentTypeError(f"File not found: {filepath}")
+    if not filepath.endswith(('.fastq', '.fastq.gz', '.fq', '.fq.gz')):
+        raise argparse.ArgumentTypeError(f"Must be FASTQ format: {filepath}")
+    if not os.access(filepath, os.R_OK):
+        raise argparse.ArgumentTypeError(f"File not readable: {filepath}")
+    return filepath
+
+# trim_key and adapter are mutually exclusive, with trim_key being a default of miR166
+def valid_sequence(seq):
+    """Validate and normalize DNA/RNA sequence."""
+    # Convert to uppercase
+    seq = seq.upper()
+    
+    # Check length
+    if len(seq) < 15 or len(seq) > 25:
+        raise argparse.ArgumentTypeError(
+            f"Sequence must be 15-25 characters long (got {len(seq)})"
+        )
+    
+    # Check for valid characters
+    valid_chars = set('ATGCU')
+    if not set(seq).issubset(valid_chars):
+        invalid = set(seq) - valid_chars
+        raise argparse.ArgumentTypeError(
+            f"Sequence contains invalid characters: {invalid}. Only A, T, G, C, U allowed"
+        )
+    
+    # Convert U to T
+    seq = seq.replace('U', 'T')
+    
+    return seq
 
 
-ap = argparse.ArgumentParser()
+def print_start_message(args):
+    print(f"Starting ShortCut version {version} with these options:")
+    for arg, value in vars(args).items():
+        if value is not None:
+            # Format lists nicely
+            if isinstance(value, list):
+                print(f"  {arg}: {', '.join(value)}")
+            else:
+                print(f"  {arg}: {value}")
+    print()
 
-ap.add_argument('-fastq',nargs='*',required=True,help='One or more fastq alignment files')
-ap.add_argument("-n", help="Results file name")
-ap.add_argument("-m", help="Minimum length of reads for Cutadapt", default = 12)
-ap.add_argument("-threads", help="Specify number of threads for samtools", default = 1)
-ap.add_argument("-kingdom", required=True,choices=["plant","animal"],help="Specify animal or plant")
-ap.add_argument("-annotate",help="Specify whether you want ShortStack to annotate",nargs='?', const='')
-ap.add_argument("-out", help="output directory",default="ShortCut_output")
-ap.add_argument('-genome',help='Genome for annotation')
-ap.add_argument('-known_mirnas',help='FASTA-formatted file of known mature miRNA sequences')
-ap.add_argument("-ssout", help="output directory",default="Shortstack_output")
-ap.add_argument("-trimkey", help="Abundant miRNA used to find adapters for trimming with option -autotrim")
-ap.add_argument("-dn_mirna", help="De novo miRNA search in ShortStack")
-args = ap.parse_args()
-
-#print log
-print("--------")
-print("sRNATrim version " + version)
-print("Options:")
-print("     'Threads' " + str(args.threads))
-print("     'Kingdom' "+ args.kingdom)
-print("     'm' "+ str(args.m))
-print("     'Output directory' "+ args.out+"/")
-if args.fastq is not None:
-    print("     'Fastqs' " +str(args.fastq))
-if args.annotate is not None:
-    print("     'Annotate sRNAs' yes")
-    print("     'Genome' " +str(args.genome))
-    print("     'known_mirnas' " +str(args.known_mirnas))
-    if args.dn_mirna == True:
-        print("     'denovo miRNAs' " +str(args.known_mirnas))
-    print("     'ssout' " +str(args.ssout))
-
-print("--------")
-
-if args.annotate is True:
-    req_packs=["ShortStack"]
-    for pack in req_packs:
-        path = shutil.which(pack)
-        if path is not None:
-            print('Requires package {0} : {1}'.format(pack,path))
-        else:
-            msg = 'Requires package {0} : Not found!'.format(pack)
-            sys.exit(msg)
-
-path=args.out
-isExist = os.path.exists(path)
-if isExist==True:
-    msg = ("Output directory '" + args.out + "/' already exists. Please assign a new output directory using option '-out'.")
-    sys.exit(msg)
-        
-if args.annotate is None and args.genome is not None:
-        msg="Error: To annotate using ShortStack, please include the option '-annotate'."
+def prep_outdir(args):
+    path=args.out_dir
+    isExist = os.path.exists(path)
+    if isExist==True:
+        msg = ("Output directory '" + args.out_dir + "/' already exists. Please assign a new output directory using option '-out'.")
         sys.exit(msg)
+    subprocess.call(["mkdir",args.out_dir])
+    os.chdir(args.out_dir)
+    print(f'Made output directory {args.out_dir}')
+    subprocess.call(["mkdir","trimmed_ok"])
+    subprocess.call(["mkdir","short"])
+    subprocess.call(["mkdir","untrimmed"])
 
-#_____________ Functions ______________
-def run(cmd) :
-#Run subprocess
-    proc = subprocess.call(cmd, shell=True,stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)
+def get_adapter(args, fastqs):
+    # If necessary, learns the adapter from the first fastq file.
+    if args.adapter is None:
+        # use just one file to learn adapter
+        abs_fastq = fastqs[0]
+        print(f'        Detecting adapter for {abs_fastq} with trim_key {args.trim_key}')
+        if not os.path.exists(abs_fastq):
+            sys.exit(f"        Error: File {abs_fastq} does not exist. Please check the path.")
 
-def process_fastqs(fastqs, keydna, args):
-    count = 0  # Initialize count at the start of the function
-
-    for fastq in fastqs:
-        print("Detecting adapter for " + fastq + " with key "  + keydna)
-        if not os.path.exists(fastq):
-            sys.exit(f"Error: File {fastq} does not exist. Please check the path.")
-
-        if fastq.endswith(".gz"):
+        if abs_fastq.endswith(".gz"):
             cmd = (
-                f"gzip -dc {fastq} | awk -v target='{keydna}' '{{idx = index($0, target); if (idx) print substr($0, idx + length(target),20)}}' | "
+                f"gzip -dc {abs_fastq} | awk -v target='{args.trim_key}' '{{idx = index($0, target); if (idx) print substr($0, idx + length(target),20)}}' | "
                 "uniq -c | sort -nr | head -n1 | awk '{print $2}'"
             )
         else:
             cmd = (
-                f"awk -v target='{keydna}' '{{idx = index($0, target); if (idx) print substr($0, idx + length(target),20)}}' {fastq} | "
+                f"awk -v target='{args.trim_key}' '{{idx = index($0, target); if (idx) print substr($0, idx + length(target),20)}}' {abs_fastq} | "
                 "uniq -c | sort -nr | head -n1 | awk '{print $2}'"
             )
 
         try:
-            output = subprocess.check_output(cmd, shell=True, text=True).strip()
+            adapter = subprocess.check_output(cmd, shell=True, text=True).strip()
         except subprocess.CalledProcessError as e:
-            sys.exit(f"Error while processing {fastq}: {e.output}")
+            sys.exit(f"        Error while processing {abs_fastq}: {adapter.output}")
 
-        if "G" not in output:
-            print("No adapter detected. Copying untrimmed file to trimmedLibraries instead.")
-
-            head, tail = os.path.split(fastq)
-            tfile = os.path.join('trimmedLibraries', f"{tail}")
-            shutil.copy(fastq, tfile)
-            continue
+        if "G" not in adapter:
+            print("        No adapter detected. Copying untrimmed file to trimmedLibraries instead.")
+            sys.exit(f'        Error while inferring adapter from {abs_fastq} : Invalid adapter found: {adapter}')
         else:
-            print(f"Adapter detected: {output}")
-            count += 1 
+            print(f"        Adapter detected: {adapter}")
+            args.adapter = adapter
+        return
+    else:
+        return
 
-        head, tail = os.path.split(fastq)
-        tfile = os.path.join('trimmedLibraries', f"t_{tail}")
-        report_file = os.path.join('trimmedLibraries', f"{tail}_cutadapt_report.txt")
+def create_dicerok_figure(full_df, args):
+    # Make table that has total counts by Source
+    src_totals = full_df.groupby(['Source'])[['Reads','Sequences']].sum().reset_index()
 
-        if fastq.endswith(".gz"):
-            cmd = (
-                f"gzip -dc {fastq} | cutadapt -j {args.threads} -a {output} -o {tfile} -m {args.m} -"
-            )
-        else:
-            cmd = f"cutadapt -j {args.threads} -a {output} -o {tfile} -m {args.m} {fastq}"
+    # Filter, group and sum to get DicerOK counts
+    dicerok_totals = full_df[full_df['Length'].between(args.dicermin, args.dicermax)].groupby('Source')[['Reads', 'Sequences']].sum().reset_index()
 
-        try:
-            result = subprocess.run(cmd, shell=True, text=True, capture_output=True)
-            with open(report_file, "w") as rf:
-                rf.write(result.stdout)
-        except Exception as e:
-            sys.exit(f"Error trimming {fastq}: {e}")
+    # Compute the DicerOK ratios for both Reads and Sequences
+    ratios = dicerok_totals.set_index('Source') / src_totals.set_index('Source')
 
-    return count
+    # reshape for plotting
+    # Reset index to make Source a regular column
+    df_long = ratios.reset_index()
 
-def summarize_cutadapt_reports(trimmed_dir='trimmedLibraries', output_csv='trimming_summary.csv'):
-    summary = {}
+    # Melt to long format
+    df_long = df_long.melt(id_vars='Source', 
+                        value_vars=['Reads', 'Sequences'],
+                        var_name='Method', 
+                        value_name='DicerOK')
+    # Make figure
+    fig = px.box(df_long,
+                 color = "Method",
+                 y = "DicerOK",
+                 points="all",
+                 hover_data=df_long.columns,
+                 range_y=[0,1],
+                 width = 600)
 
-    for filename in os.listdir(trimmed_dir):
-        if filename.endswith("_cutadapt_report.txt"):
-            sample = filename.replace("_cutadapt_report.txt", "")
-            filepath = os.path.join(trimmed_dir, filename)
-            
-            with open(filepath) as f:
-                content = f.read()
+    html = fig.to_html(include_plotlyjs=False,
+                       full_html=False,
+                       div_id='dicerok')
+    
+    return html
 
-            total_reads=re.search(r"Total reads processed:\s+([\d,]+)", content)
-            if total_reads:
-                total_count = total_reads.group(1).replace(",", "")
+def create_trim_stacked_barchart(df):
+    # Sum reads and sequences by Category and Source
+    summed_df = df.groupby(['Category', 'Source'])[['Reads', 'Sequences']].sum().reset_index()
+
+    # Reshape into long format
+    df_long = summed_df.melt(id_vars=['Source','Category'], 
+                        value_vars=['Reads', 'Sequences'],
+                        var_name='Metric', 
+                        value_name='Count')
+
+    # Boxplot, showing data
+    fig = px.box(df_long,
+                 x = "Category",
+                 y = "Count",
+                 color = "Metric",
+                 points = "all",
+                 hover_data=df_long.columns,
+                 width = 900)
+
+    
+    html = fig.to_html(include_plotlyjs=False,
+                       full_html=False,
+                       div_id='trim_fig')
+    
+    return html
 
 
-            # Extract "Reads with adapters"
-            match_adapters = re.search(r"Reads with adapters:\s+([\d,]+) \(([\d.]+)%\)", content)
-            if match_adapters:
-                adapters_count = match_adapters.group(1).replace(",", "")
-                adapters_percent = match_adapters.group(2) + "%"
-            else:
-                adapters_count = adapters_percent = "N/A"
-
-            # Extract "Reads written"
-            match_written = re.search(r"Reads written \(passing filters\):\s+([\d,]+) \(([\d.]+)%\)", content)
-            if match_written:
-                written_count = match_written.group(1).replace(",", "")
-                written_percent = match_written.group(2) + "%"
-            else:
-                written_count = written_percent = "N/A"
-
-            summary[sample] = {
-                "Reads with adapters": adapters_count,
-                "% Reads with adapters": adapters_percent,
-                "Reads written (passing filters)": written_count,
-                "% Reads written": written_percent,
-                "Total reads": total_count
-            }
-
-    # Transpose into a dataframe-like CSV structure
-    metrics = ["Reads with adapters", "% Reads with adapters", 
-               "Reads written (passing filters)", "% Reads written", "Total reads"]
-
-    with open(output_csv, "w", newline="") as csvfile:
-        writer = csv.writer(csvfile)
-        header = ["Metric"] + list(summary.keys())
-        writer.writerow(header)
+def get_len_figs(df, args):
+    all_html = ''
+    # Get all unique Source names into an array to iterate over
+    unique_sources = df['Source'].unique()
+    
+    for unq_source in unique_sources:
+        filt_df = df[df['Source'] == unq_source]
         
+        # Get unique categories and metrics
+        categories = filt_df['Category'].unique()
+        metrics = ['Reads', 'Sequences']
+        
+        # Create figure
+        fig = go.Figure()
+        
+        # Add traces for each metric and category combination
         for metric in metrics:
-            row = [metric]
-            for sample in summary:
-                row.append(summary[sample].get(metric, "N/A"))
-            writer.writerow(row)
-    
-    print(f"Cutadapt summary written to {output_csv}")
+            for category in categories:
+                # Filter data for this category
+                category_data = filt_df[filt_df['Category'] == category]
+                
+                fig.add_trace(go.Scatter(
+                    x=category_data['Length'],
+                    y=category_data[metric],
+                    mode='lines+markers',
+                    name=category,
+                    visible=(metric == 'Reads'),  # Only Reads visible initially
+                    legendgroup=category
+                ))
+        
+        # Create dropdown buttons
+        buttons = []
+        num_categories = len(categories)
+        
+        for i, metric in enumerate(metrics):
+            visible = [False] * len(fig.data)
+            showlegend = [False] * len(fig.data)
+            
+            # Make traces for this metric visible and show their legend
+            start_idx = i * num_categories
+            end_idx = start_idx + num_categories
+            visible[start_idx:end_idx] = [True] * num_categories
+            showlegend[start_idx:end_idx] = [True] * num_categories
+            
+            buttons.append(dict(
+                label=metric,
+                method='update',
+                args=[{'visible': visible, 'showlegend': showlegend},
+                      {'yaxis.title.text': metric}]
+            ))
+        
+        # Add DicerOK shaded region
+        fig.add_vrect(
+            x0=(args.dicermin - 0.5), 
+            x1=(args.dicermax + 0.5), 
+            fillcolor="green",
+            opacity=0.2, 
+            annotation_text="DicerOK", 
+            annotation_position="top left"
+        )
+        
+        fig.update_layout(
+            updatemenus=[dict(
+                buttons=buttons,
+                direction='down',
+                showactive=True,
+            )],
+            title=f"{unq_source} : Length distribution by Reads or Sequences",
+            xaxis_title='Length',
+            yaxis_title='Reads'
+        )
+        
+        html = fig.to_html(include_plotlyjs=False,
+                           full_html=False,
+                           div_id=f'len_{unq_source}')
+        all_html += html
 
-def DNAcheck(dna):
-    """
-    Check whether a DNA/RNA sequence contains only valid nucleotides (A, T, G, C, U).
+    return all_html
 
-    Parameters:
-        sequence (str): DNA/RNA sequence to validate.
+def trim_reads(args,fastqs):
+    for fastq in fastqs:
+        head, tail = os.path.split(fastq)
+        suffixes = ['.fq.gz', '.fastq.gz', '.fq', '.fastq']
+        for suffix in suffixes:
+            if tail.endswith(suffix):
+                tail = tail[:-len(suffix)]  # Remove suffix
+                break
+        tail = tail + '.fa'
+        tfile = os.path.join('trimmed_ok', f"t_{tail}")
+        sfile = os.path.join('short', f"s_{tail}")
+        nafile = os.path.join('untrimmed', f"u_{tail}")
+        cmd = f"cutadapt -j {args.threads} -m {args.min_read_size}"
+        cmd += f" -a {args.adapter} --too-short-output {sfile}"
+        cmd += f" --untrimmed-output {nafile} -o {tfile} --fasta"
+        cmd += f" {fastq} > /dev/null"
+        # stderr will have the progress bar, which passes through
+        # stdout will have the report, which I throw out
+        print()
+        print(f"Trimming {fastq} with cutadapt using adapter {args.adapter}")
+        subprocess.run(cmd, shell=True, text=True)
+        print("    Condensing and counting the results")
 
-    Returns:
-        int: 2 if the sequence is valid, 1 otherwise.
-    """
-#Check that all characters in provided sequences are ATGCU
-    y = dna.upper()
-    if re.match("^[ATGCU]+$", y):
-        return(2)
+        ca_files = [tfile, sfile, nafile]
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            #executor.map(condense_fasta, ca_files)
+            futures = [executor.submit(condense_fasta, f) for f in ca_files]
+            for future in futures:
+                future.result()  # This will re-raise any exception that occurred
+
+def condense_fasta(input_file):
+    cd_file = input_file.replace('.fa', '_Cd.txt')
+    cd_cmd = f"grep -v '>' {input_file} | sort | uniq -c | sort -nr > {cd_file}"
+    subprocess.run(cd_cmd, shell=True, text=True)
+    subprocess.run(f"rm -f {input_file}", shell=True, text=True)
+    cdfa_file = input_file.replace('.fa', '_Cd.fa')
+    seqid = 0
+    head, tail = os.path.split(cdfa_file)
+    base = tail.replace('_Cd.fa','')
+    read_tally = defaultdict(int)
+    seq_tally = defaultdict(int)
+    with open(cdfa_file, 'w') as cdfa:
+        with open(cd_file) as sorted_file:
+            for line in sorted_file:
+                seqid += 1
+                parts = line.split()
+                
+                if len(parts) >= 1:  # At least one column
+                    count = parts[0]
+                    sequence = parts[1] if len(parts) >= 2 else ''
+                    header = f">{base}_Cd{seqid}_{count}"
+                    cdfa.write(f"{header}\n{sequence}\n")
+                    read_tally[len(sequence)] += int(count)
+                    seq_tally[len(sequence)] += 1
+    subprocess.run(f"rm -f {cd_file}", shell=True, text=True)
+    tally_file = base + '_tally.csv'
+    # check if we have a t_, s_, or u_
+    prefix, rest = base[:2], base[2:]
+    if prefix == 't_':
+        category = 't (Trimmed OK)'
+    elif prefix == 's_':
+        category = 's (Short)'
+    elif prefix == 'u_':
+        category = 'u (Untrimmed)'
     else:
-        return(1)
+        sys.exit(f"Error: unable to parse {prefix} during read counting and condensation.")
+    with open(tally_file, 'w') as tf:
+        for length in sorted(read_tally):
+            out = [length, read_tally[length], seq_tally[length], category, rest]
+            out_str = ','.join(map(str, out))
+            tf.write(out_str + '\n')
 
-def get_distribution_from_trimmedLibraries(trimmedLibraries):
-    # Get a list of all FASTQ and gzipped FASTQ files in the directory
-    fastq_files = [
-        os.path.join(trimmedLibraries, f)
-        for f in os.listdir(trimmedLibraries)
-        if f.endswith('.fastq') or f.endswith('.fastq.gz')
-    ]
+def merge_tallys():
+    tally_file = 'ShortCut_tallys.csv'
+    header_row = 'Length,Reads,Sequences,Category,Source\n'
+    with open(tally_file, 'w') as tf:
+        tf.write(header_row)
+    cmd = f"cat *_tally.csv >> {tally_file}"
+    subprocess.run(cmd, shell=True, text=True)
+    clean_cmd = "rm -f *_tally.csv"
+    subprocess.run(clean_cmd, shell=True, text=True)
+    tallys_df = pd.read_csv('ShortCut_tallys.csv')
+    print()
+    print(f"Wrote summary data to {tally_file}")
+    return tallys_df
+
+def write_html(args,trim_fig,pdok_fig,len_figs,trim_prop_fig):
+    # Get the Plotly.js library as a string to embed
+    plotlyjs = pyo.get_plotlyjs()
+    # Prepare the string from args
+    argstring = ''
+    for arg, value in vars(args).items():
+        if value is not None:
+            # Format lists nicely
+            if isinstance(value, list):
+                argstring += f"<li>{arg}: {', '.join(value)}</li>"
+            else:
+                argstring += f"<li>{arg}: {value}</li>"
+
+    html_start_string = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>ShortCut Report</title>
+    <script type="text/javascript">{plotlyjs}</script>
+       <style>
+        body {{
+            font-family: "Open Sans", verdana, arial, sans-serif;
+        }}
+    </style>
+</head>
+<body>
+    <div id="settings">
+        <h1>ShortCut Report</h1>
+        <h2>Options</h2>
+        <p>ShortCut version {version} completed at {time.strftime("%Y-%m-%d %H:%M:%S")}</p>
+        <ul>{argstring}</ul>
+    </div>
+    <div><h2>Read Trimming Results</h2>
+            <h3>By count</h3>
+            {trim_fig}
+            <h3>By proportion</h3>
+            {trim_prop_fig}
+    </div>
+    <div><h2>DicerOK Results</h2>
+        <p>"DicerOK" is the fraction >= dicermin {args.dicermin} AND <= dicermax {args.dicermax}</p>
+        {pdok_fig}
+    </div>
+    <div><h2>Individual Read Length Distributions</h2>
+        {len_figs}
+    </div>
+</body>
+</html>  
+"""
+    with open('ShortCut_Results.html', 'w', newline='') as out:
+        out.writelines(html_start_string)
+    print()
+    print('Report completed and written to ShortCut_Results.html')
+
+def create_trim_prop_figure(df):
+    # Sum reads and sequences by Category and Source
+    summed_df = df.groupby(['Category', 'Source'])[['Reads', 'Sequences']].sum().reset_index()
+
+    # Calculate proportions for each Source
+    proportions_df = summed_df.copy()
+    proportions_df['Reads'] = summed_df.groupby('Source')['Reads'].transform(lambda x: x / x.sum())
+    proportions_df['Sequences'] = summed_df.groupby('Source')['Sequences'].transform(lambda x: x / x.sum())
+
+    # Convert to long format
+    proportions_long = proportions_df.melt(
+        id_vars=['Category', 'Source'],
+        value_vars=['Reads', 'Sequences'],
+        var_name='Metric',
+        value_name='Proportion'
+    )
+
+    # Produce the figure
+    fig = px.box(proportions_long,
+                 x = "Category",
+                 y = "Proportion",
+                 color = "Metric",
+                 points = "all",
+                 hover_data=proportions_long.columns,
+                 width = 900,
+                 range_y=[0,1])
+
+    html = fig.to_html(include_plotlyjs=False,
+                       full_html=False,
+                       div_id='trim_prop_fig')
     
-    if not fastq_files:
-        print("No FASTQ files found in the trimmedLibraries.")
-        return
-
-    # Dictionary to store read length distributions
-    distributions = {}
-
-    for fastq_file in fastq_files:
-        length_count = {}
-
-        # Open normally if .fastq, else use gzip for .fastq.gz
-        open_func = gzip.open if fastq_file.endswith('.gz') else open
-
-        with open_func(fastq_file, 'rt') as f:
-            for i, line in enumerate(f):
-                if i % 4 == 1:  # Sequence lines (2nd line in every FASTQ entry)
-                    read_length = len(line.strip())
-                    length_count[read_length] = length_count.get(read_length, 0) + 1
-
-        distributions[fastq_file] = length_count
-
-    # Find the union of all read lengths across all files
-    all_lengths = sorted({length for dist in distributions.values() for length in dist})
-
-    # Prepare CSV data
-    csv_data = [['Read Length'] + [os.path.basename(file) for file in fastq_files]]  # Header row
-
-    for length in all_lengths:
-        row = [length]  # First column is the read length
-        for file in fastq_files:
-            row.append(distributions[file].get(length, 0))
-        csv_data.append(row)
-
-    # Write to CSV file
-    output_csv = 'read_length_distribution.csv'
-    with open(output_csv, 'w', newline='') as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerows(csv_data)
-
-
-def run_ss(t_fastq_list, threads,genome, known_mirnas):
-    print("Annotating sRNAs in " + str(args.known_mirnas))
-    if args.dn_mirna == True:
-        print("Conducting de novo annotation of sRNAs...")
-
-        command=(f"ShortStack --genomefile ../{genome} --threads {threads} --readfile {t_fastq_list}* --dn_mirna --known_miRNAs ../{known_mirnas}")
-        print("Annotating using the following command:")
-        print(command)
-        run(command)
-    else:
-        command = f"ShortStack --genomefile ../{genome} --threads {threads} --readfile {t_fastq_list}* --known_miRNAs ../{known_mirnas}"
-        print("Annotating using the following command:")
-        print(command)
-        run(command)
-        # Open process and stream output in real-time
-    # Use Popen for real-time output streaming
-    process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1, universal_newlines=True)
-
-    # Print output line by line in real time
-    for line in process.stdout:
-        print(line, end="")  # Print and flush each line
-        sys.stdout.flush()   # Ensure immediate printing
-
-    # Print error output if any
-    for line in process.stderr:
-        print(line, end="", file=sys.stderr)
-        sys.stderr.flush()
-
-    process.wait()  # Ensure the process completes
-
-def count_reads(filepath):
-    """Count reads in a FASTQ or FASTQ.GZ file (1 read = 4 lines)"""
-    open_func = gzip.open if filepath.endswith('.gz') else open
-    with open_func(filepath, 'rt') as f:
-        return sum(1 for _ in f) // 4
-
-def get_fastq_files(directory):
-    """Return list of .fastq, .fastq.gz, .fq, .fq.gz files in directory"""
-    valid_extensions = ('.fastq', '.fastq.gz', '.fq', '.fq.gz')
-    return [f for f in os.listdir(directory) if f.endswith(valid_extensions)]
-
-def generate_library_size_csv(directory, output_csv="library_sizes.csv"):
-    fastq_files = get_fastq_files(directory)
-    if not fastq_files:
-        print("No FASTQ files found in directory.")
-        return
-
-    with open(output_csv, 'w', newline='') as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(["Library", "ReadCount"])
-
-        for filename in fastq_files:
-            filepath = os.path.join(directory, filename)
-            read_count = count_reads(filepath)
-            writer.writerow([filename, read_count])
+    return html
 
 #_________ run ____________
 def main():
-            subprocess.call(["mkdir",args.out])
-            os.chdir(args.out)
+    check_executables()
+    args = get_ShortCut_args(version)
+    print_start_message(args)
+    fastqs = [os.path.abspath(item) for item in args.fastq]
+    prep_outdir(args)
+    get_adapter(args, fastqs)
+    trim_reads(args,fastqs)
+    tallys_df = merge_tallys()
+    
+    # Create figures
+    # These functions return one or more html divs
+    trim_fig = create_trim_stacked_barchart(tallys_df)
+    trim_prop_fig = create_trim_prop_figure(tallys_df)
+    pdok_fig = create_dicerok_figure(tallys_df,args)
+    len_figs = get_len_figs(tallys_df,args)
 
-            fastqs = ['../' + item for item in args.fastq]
-
-            print(" ")
-            print("Trimming adapters...")
-            #If no key provided, set key according to kingdom.
-            if args.trimkey is None:
-                subprocess.call(["mkdir","trimmedLibraries"])
-                if args.kingdom == 'plant':
-                    #ath-miR166a
-                    print("No key provided for trimming.")
-                    key="UCGGACCAGGCUUCAUUCCCC"
-                    print("     trimkey used for discovering adapter sequence: "+key)
-                else:
-                    #hsa-let-7a
-                    print("No key provided for trimming.")
-                    key="UGAGGUAGUAGGUUGUAUAGUU"
-                    print("     trimkey used for discovering adapter sequence: " + key)
-            else:
-                subprocess.call(["mkdir","trimmedLibraries"])
-                key=args.trimkey
-            #Change key to uppercase and to DNA
-            key=key.upper()
-            keydna=key.translate(str.maketrans("uU", "tT"))
-
-            key_check=DNAcheck(keydna)
-            if key_check ==1:
-                sys.exit("Error! Key for trimming adapters has characters besides A, T, G, C, or U!")
-            if (len(key) < 20) or (len(key) > 30):
-                sys.exit("Trim key must be between 20 and 30 letters")
-
-            #pre-trimmed lib count  
-            count=0
-  
-            #Trim adapters
-            count = process_fastqs(fastqs, keydna, args)
-
-            print("Adapter trimming complete. ✅")
-
-            get_distribution_from_trimmedLibraries("trimmedLibraries/")
-
-            # library size graph:
-            #R lib distribution
-            r_script1 = """
-
-            # Load data
-            df <- read_csv("trimming_summary.csv",show_col_types = FALSE)
-
-            # Pivot into long format, including Total reads
-            df_long <- df %>%
-            filter(Metric %in% c( "Reads with adapters", "Reads written (passing filters)","Total reads")) %>%
-            pivot_longer(-Metric, names_to = "Library", values_to = "Count") %>%
-            mutate(
-                Count = as.numeric(Count),
-                Metric = factor(
-                Metric,
-                levels = c("Total reads","Reads with adapters", "Reads written (passing filters)")
-                )
-            )
-                
-            # Pivot wider to get totals for each library
-            totals <- df_long %>%
-            filter(Metric == "Total reads") %>%
-            select(Library, Total = Count)
-
-            # Join with long data and compute percentage
-            df_labeled <- df_long %>%
-            left_join(totals, by = "Library") %>%
-            mutate(Percent = round(100 * Count / Total, 1),
-                    Label = paste0(Percent, "%"))
-
-            # Extract % Reads written to use as labels
-            percent_labels <- df %>%
-            filter(Metric == "% Reads written") %>%
-            pivot_longer(-Metric, names_to = "Library", values_to = "Percent")
-
-            # Plot function
-            lib_plot <- function(data) {
-            ggplot(df_labeled, aes(x = Library, y = Count, fill = Metric)) +
-                geom_bar(stat = "identity", position = position_dodge(width = 0.7), 
-                        color = "black", width = 0.6, alpha = 0.85) +
-                geom_text(
-                    aes(label = Label),
-                    position = position_dodge(width = 0.7),
-                    vjust = -0.5,
-                    size = 3,
-                    fontface = "bold"
-                ) +
-                scale_fill_manual(values = c(
-                    "Total reads" = "grey80",
-                    "Reads written (passing filters)" = "steelblue",
-                    "Reads with adapters" = "lightblue"
-                )) +
-                scale_y_continuous(labels = scales::comma, expand = expansion(mult = c(0, 0.1))) +
-                labs(
-                    title = "Cutadapt Summary",
-                    x = "Library",
-                    y = "Read Count",
-                    fill = "Read Type"
-                ) +
-                theme_minimal() +
-                theme(axis.text.x = element_text(angle = 45, hjust = 1))
-            }
-
-            # Generate and save the plot
-            plot_obj <- lib_plot(df_labeled)
-            ggsave("Cutadapt_summary.png", plot = plot_obj, width = 10, height = 7, dpi = 300, bg = "white")
-            """
-            if count != 0:
-                summarize_cutadapt_reports()
-                print("Libraries trimmed: " + str(count))
-
-                # Generate R plot
-                robjects.r(r_script1)
-                print("Cutadapt summary generated. ✅")
-
-                
-            # Only continue if some libraries were actually trimmed
-            get_distribution_from_trimmedLibraries("trimmedLibraries/",)
-
-            
-            #Create read distribution plots            
-            r_script="""
-
-            file_path <- "read_length_distribution.csv"
-
-            # Load and filter data
-            data <- read.csv(file_path)
-            data_filt <- data[data$Read.Length < 51, ]
-
-            # Get list of library names (excluding Read.Length column)
-            libraries <- colnames(data_filt)[-1]
-
-            # Start PDF device
-            pdf("Read_distribution.pdf", width = 10, height = 6, bg = "white")
-
-            # Loop through libraries and plot each one
-            for (lib in libraries) {
-            df_single <- data_filt %>%
-                select(Read.Length, all_of(lib)) %>%
-                rename(Count = all_of(lib))
-
-            plot_obj <- ggplot(df_single, aes(x = Read.Length, y = Count)) +
-                geom_line(color = "steelblue", linewidth = 1) +
-                geom_point(color = "steelblue", size = 2) +  # Add points to each x
-                theme_minimal() +
-                labs(
-                title = paste("Read Length Distribution:", lib),
-                x = "Read Length",
-                y = "Count"
-                ) +
-                scale_x_continuous(
-                breaks = seq(min(df_single$Read.Length), max(df_single$Read.Length), by = 1)
-                ) +
-                theme(
-                legend.position = "none",
-                panel.grid.minor.x = element_blank(), # Remove minor x gridlines
-                panel.grid.major.x = element_line(color = "grey80") # Keep only integer lines
-                )
-
-            print(plot_obj)  # Each plot gets its own page
-            }
-
-            dev.off()
-
-            """
-
-            robjects.r(r_script)
-            print("Read distribution plot generated. ✅")
-
-            generate_library_size_csv("trimmedLibraries",output_csv="library_sizes.csv")
-
-            r_script_libsize = """
-            library(tidyverse)
-
-            # Define your directory
-            libCounts<- read.csv("library_sizes.csv")
-
-            libCounts <- libCounts %>%
-            mutate(Library = factor(Library, levels = Library[order(ReadCount)]),
-                    ReadCount_shadow = ReadCount * 0.90)  # Adjust depth of the "3D" effect
-
-            plot_obj<-ggplot(libCounts) +
-            # Shadow (slightly offset to bottom-right)
-            geom_col(aes(x = Library, y = ReadCount_shadow), fill = "grey30", width = 0.6) +
-            # Main bar
-            geom_col(aes(x = Library, y = ReadCount), fill = "steelblue", width = 0.6) +
-            # Labels
-            geom_text(aes(x = Library, y = ReadCount, label = format(ReadCount, big.mark = ",")),
-                        vjust = -0.5, size = 3, fontface = "bold") +
-            labs(
-                title = "Read Counts per Library",
-                x = "Library",
-                y = "Number of Reads"
-            ) +
-            theme_minimal(base_size = 13) +
-            theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-            # Generate and save the plot
-            ggsave("Library_summary.png", plot = plot_obj, width = 10, height = 7, dpi = 300, bg = "white")
-            """
-
-            robjects.r(r_script_libsize)
-            print("Library size plot generated. ✅")
-
-            cmd = f"rm -rf trimmedLibraries/*.txt"
-            os.system(cmd)
-            cmd = f"rm read_length_distribution.csv"
-            os.system(cmd)
-            cmd = f"rm library_sizes.csv"
-            os.system(cmd)
-
-            t_fastq_files = "trimmedLibraries/"
-            if args.annotate is not None:
-                run_ss(t_fastq_files,args.threads,args.genome,args.known_mirnas)
-            
+    # Write html file
+    write_html(args,trim_fig,pdok_fig,len_figs,trim_prop_fig)
 
 
 if __name__ == "__main__":

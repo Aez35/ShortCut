@@ -1,70 +1,88 @@
 # ShortCut
-small RNA trimming, library quality control, and alignment all in one go!
+Adapter trimming and length distributions from small RNA-seq data
 
+# Introduction
+Small RNA sequencing usually produces reads that are longer than the biological RNAs. The extra sequence derives from adapters and is present at the 3' end of each read. Before analysis, these residual adapter sequences need to be identified and removed. After trimming, the size distribution of the trimmed reads is informative to assess sample quality. High rates of RNA degradation in the input are often reflected in the size profile of the trimmed reads. 
 
-### Create environment and install dependencies
-```
-#Create environment
-conda create -n shortcut shortcut
-```
-### Requirements
-`python` >= 3.6  
-`biopython` >= 1.85  
-`r-base` >= 4.3.3  
-`r-tidyverse` >= 2.0  
-`r-ggplot2` >= 3.5.2  
-`shortstack` >= 4.0.4  
-`cutadapt` >= 4.8   
-`rpy2`
+ShortCut automates adapter discovery, trimming, and provides an easy to use report on the results. The trimmed reads are output in a condensed FASTA format (see below) and are ready for further analysis.
 
+## Input
+One or more FASTQ files (can be .gz compressed) containing untrimmed small RNA seq data.
 
+## Output
+- Three condensed FASTA files per input FASTQ file. The three files contained properly trimmed sequences, sequences that were too short to be acceptable after trimming, and sequences where no adapter was identified, respectively.
+- A csv-formatted file containing summary data on the output.
+- An html report file giving an overview of the results.
+
+# Install
+1. Install `pixi` on your system <https://pixi.prefix.dev/latest/installation/>
+2. Configure `pixi` to use BioConda per <https://bioconda.github.io/>
+3. ```
+   mkdir myShortCut
+   cd myShortCut
+   pixi init
+   pixi add pandas cutadapt plotly
+   pixi shell
+   ```
+4. Download the `ShortCut` file, `chmod +x ShortCut`, and run using `./ShortCut`. Or install to your path as you see fit.
+
+(Mike to do - place this version of ShortCut on BioConda to simplify installation)
 
 # Usage
-
-## ShortCut
+With `pixi shell` activated as described above:
 ```
-ShortCut [-help] -fastq FASTQ/FASTA -kingdom plant/animal [-trimkey KEY] [-threads THREADS] [-out outputDirectory, default= shortcut_output/] [-annotate] [-genome GENOME.fa] [-known_mirnas MIRNAS.fa] [-dn_mirna] [-ssout ssOutputDirectory]
-```
+usage: ShortCut [-h] --fastq FASTQ [FASTQ ...] [--min_read_size MIN_READ_SIZE] [--out_dir OUT_DIR] [--threads THREADS] [--dicermin DICERMIN] [--dicermax DICERMAX]
+                [--trim_key TRIM_KEY | --adapter ADAPTER]
 
-## Options
-
-|Option     |Description                                                     |
-|:---------:|:-----------------------------------------------------------:   |
-|help       | prints help message                                            |
-|fastq      | List of small RNA-seq libraries in FASTQ format (zipped ok)    |
-|kingdom    | Specify either 'plant' or 'animal'                             |
-|m          | Minimum read length for Cutadapt. Default is 12.               |
-|out        | Output directory, default is ShortCut_output                   |
-|threads    | Specify number of threads to use during trimming step          |
-|annotate   | Switch to trigger sRNA annotations with ShortStack             |
-|known_mirnas| FASTA file containing known miRNAs for ShortStack annotating  |
-|genome     | Genome used for ShortStack alignment and annotation of sRNAs   |
-|trimkey    | miRNA sequence for detecting adapter sequences for trimming    |
-|ssout      | ShortStack output directory. ShortStack will create default    |
-|dn_mirna   | De novo miRNA search option in ShortStack                      |
-
-
-## Example
-
-```
-#Ensure sra-tools is installed in your environment
-fasterq-dump SRR218099 SRR218096
-
-ShortCut -fastq SRR* -kingdom plant
+options:
+  -h, --help            show this help message and exit
+  --fastq FASTQ [FASTQ ...]
+                        One or more FASTQ alignment files
+  --min_read_size MIN_READ_SIZE
+                        Minimum length of trimmed reads to retain
+  --out_dir OUT_DIR     output directory
+  --threads THREADS     Number of threads to use. Default=1
+  --dicermin DICERMIN   Minimum trimmed read length for true regulatory small RNA. Default=21
+  --dicermax DICERMAX   Minimum trimmed read length for true regulatory small RNA. Default=24
+  --trim_key TRIM_KEY   Trim key to use to infer adapter sequence (default: UCGGACCAGGCUUCAUUCCCC)
+  --adapter ADAPTER     Adapter sequence to use for trimming
 ```
 
-# Results
-## Cutadapt summary
-A summary of libraries that were trimmed using Cutadapt. This provides the user an idea of how many total reads were in their unprocessed libraries, and how successful adapter trimming was at trimming these reads.
+# Test / Example
+Get some example small RNA-seq files from SRA. (Assumes installation of `fasterq-dump` from `sra-tools`).
+`fasterq-dump SRR3222443 SRR3222444 SRR3222445`
 
-![Cutadapt_summary](https://github.com/user-attachments/assets/61996985-6490-4810-8daf-146b8dcffaef)
+Then, using four threads:
+`ShortCut --fastq *.fastq --threads 4`
 
-## Library Summary 
-Barplot of all library sizes (including libraries that did not require trimming)
-![Library_summary](https://github.com/user-attachments/assets/031fa326-e5be-4465-a818-88236d138316)
+## Output details
+### Condensed FASTA files
+Each input FASTQ file results in three condensed FASTA files: 
+- The 'Short' directory contains FASTA files beginning with 's_'. These result from reads that were successfully adapter trimmed, but after trimming were shorter than the length set by option `--min_read_size` (default = 12).
+- The 'trimmed_ok' directory contains FASTA files beginning with 't_'. These result from reads that were successfully adapter trimmed, and were >= `--min_read_size` after trimming.
+- The 'untrimmed' directory contains FASTA files beginning with 'u_'. These result from reads were the adapter was not identified, and thus were not trimmed.
 
-## Read size distribution PDF
-PDF containing the sRNA read size distribution for each library. sRNA libraries generally expect a peak at 21- and 24-nt in accordance with miRNA and siRNA peaks.
-<img width="1439" alt="image" src="https://github.com/user-attachments/assets/5882e7e0-ae73-42f0-8bc5-8bd153b9c4d3" />
+Small RNA-seq data often contain multiple reads with the same sequence. These are often microRNAs or siRNAs that were highly abundant in the sample. "Read condensation" refers to the process of condensing the input for alignment such that each unique sequence is only represented once in the condensed FASTA file. Suppose the sequence TCGGACCAGGCTTCATTCCCC was the sequence for 509,066 reads. Instead of repetitively writing, and aligning, the same sequence over and over we can instead write a single FASTA entry. Example of condensed format:
+```
+>t_SRR3222443_Cd1_509066
+TCGGACCAGGCTTCATTCCCC
+```
+
+- `t_SRR3222443` : Prefix specific for the input read file. The `t_` indicates trimmed.
+- `Cd1` : `Cd` means "condensed". The integer after is a unique integer within that file.
+- `_509066` : The trailing integer that represents the total number of reads that have this sequence. In this case, 509,066 reads with this sequence.
+
+### Reads vs. Sequences
+A **read** is a single FASTQ output from the sequencer. A **sequence** is a unique sequence of DNA/RNA which may have been observed one or more times in an experiment.
+
+### ShortCut_tallys.csv
+This is a .csv file containing summary information on read counts and sequence counts by RNA length, Category (either trimmed_ok, short, or untrimmed), and Source file.  [View example csv](example/ShortCut_tallys.csv)
+
+
+### ShortCut_Results.html
+This is a report that is viewable with a web browser. It shows several interactive plots that are informative for assessing library trimming results. [View example report](example/ShortCut_Results.html)
+
+
+
 
 
