@@ -26,8 +26,6 @@ One or more FASTQ files (can be .gz compressed) containing untrimmed small RNA s
    ```
 4. Download the `ShortCut` file, `chmod +x ShortCut`, and run using `./ShortCut`. Or install to your path as you see fit.
 
-(Mike to do - place this version of ShortCut on BioConda to simplify installation)
-
 # Usage
 With `pixi shell` activated as described above:
 ```
