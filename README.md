@@ -15,19 +15,13 @@ One or more FASTQ files (can be .gz compressed) containing untrimmed small RNA s
 - An html report file giving an overview of the results.
 
 # Install
-1. Install `pixi` on your system <https://pixi.prefix.dev/latest/installation/>
-2. Configure `pixi` to use BioConda per <https://bioconda.github.io/>
-3. ```
-   mkdir myShortCut
-   cd myShortCut
-   pixi init
-   pixi add pandas cutadapt plotly
-   pixi shell
-   ```
-4. Download the `ShortCut` file, `chmod +x ShortCut`, and run using `./ShortCut`. Or install to your path as you see fit.
-
+```
+#Create environment
+conda create -n shortcut shortcut
+activate shortcut
+```
 # Usage
-With `pixi shell` activated as described above:
+With environment activated as described above:
 ```
 usage: ShortCut [-h] --fastq FASTQ [FASTQ ...] [--min_read_size MIN_READ_SIZE] [--out_dir OUT_DIR] [--threads THREADS] [--dicermin DICERMIN] [--dicermax DICERMAX]
                 [--trim_key TRIM_KEY | --adapter ADAPTER]
